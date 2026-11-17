@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    name: Format, Vet & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Get llama.cpp submodule commit
+        id: llama-commit
+        run: echo "sha=$(git rev-parse HEAD:native/llama.cpp)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache llama.cpp host libraries
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: native/lib
+          key: llama-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.llama-commit.outputs.sha }}-${{ hashFiles('native/build.sh') }}
+
+      - name: Install C/C++ toolchain and build tools
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: |
+          if ! command -v ninja >/dev/null 2>&1 || ! command -v cmake >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y build-essential cmake ninja-build
+          fi
+
+      - name: Build llama.cpp for host
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: native/build.sh host
+
+      - name: Install Gio Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev \
+            libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+
+      - name: Verify formatting (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go test
+        run: go test ./...

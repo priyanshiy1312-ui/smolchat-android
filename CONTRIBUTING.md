@@ -341,6 +341,10 @@ Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`,
 
 ## Review and merging
 
+* Automated CI checks should pass before a pull request is merged. If any
+  check fails, inspect the GitHub Actions run logs, fix the issue locally,
+  and push the fix to your branch. First-time contributors' CI runs need a
+  maintainer's approval.
 * A maintainer will review your pull request and may ask for changes. This is
   normal and part of the process, not a sign that something is wrong.
 * Push further commits to the **same branch** to update the pull request.
