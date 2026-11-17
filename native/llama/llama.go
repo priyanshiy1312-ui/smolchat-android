@@ -7,7 +7,8 @@ package llama
 #cgo android,arm64 LDFLAGS: -L${SRCDIR}/../lib/android-arm64 -lllama -lggml -lggml-cpu -lggml-base -lc++_static -lc++abi -lm -ldl -llog
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../lib/darwin-arm64 -lllama -lggml -lggml-cpu -lggml-base -lc++
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../lib/darwin-amd64 -lllama -lggml -lggml-cpu -lggml-base -lc++
-#cgo linux,!android LDFLAGS: -L${SRCDIR}/../lib/linux-${GOARCH} -lllama -lggml -lggml-cpu -lggml-base -lstdc++ -lm -lpthread
+#cgo linux,!android,amd64 LDFLAGS: -L${SRCDIR}/../lib/linux-amd64 -lllama -lggml -lggml-cpu -lggml-base -lstdc++ -lm -lpthread
+#cgo linux,!android,arm64 LDFLAGS: -L${SRCDIR}/../lib/linux-arm64 -lllama -lggml -lggml-cpu -lggml-base -lstdc++ -lm -lpthread
 #include <stdlib.h>
 #include "bridge.h"
 
