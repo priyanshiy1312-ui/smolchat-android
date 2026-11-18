@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -438,6 +440,43 @@ func hashExisting(part string) (hash.Hash, int64, error) {
 	return h, n, err
 }
 
+// ParseContentRange parses a Content-Range header of the form:
+// "bytes <start>-<end>/<total>" or "bytes <start>-<end>/*".
+// If total is "*", total is returned as -1.
+func ParseContentRange(h string) (start, end, total int64, ok bool) {
+	h = strings.TrimSpace(h)
+	if !strings.HasPrefix(strings.ToLower(h), "bytes ") {
+		return 0, 0, 0, false
+	}
+	spec := strings.TrimSpace(h[len("bytes "):])
+	rangePart, totalPart, ok := strings.Cut(spec, "/")
+	if !ok {
+		return 0, 0, 0, false
+	}
+	startStr, endStr, ok := strings.Cut(rangePart, "-")
+	if !ok {
+		return 0, 0, 0, false
+	}
+	var err error
+	start, err = strconv.ParseInt(strings.TrimSpace(startStr), 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, 0, false
+	}
+	end, err = strconv.ParseInt(strings.TrimSpace(endStr), 10, 64)
+	if err != nil || end < start {
+		return 0, 0, 0, false
+	}
+	totalPart = strings.TrimSpace(totalPart)
+	if totalPart == "*" {
+		return start, end, -1, true
+	}
+	total, err = strconv.ParseInt(totalPart, 10, 64)
+	if err != nil || total <= 0 || end >= total {
+		return 0, 0, 0, false
+	}
+	return start, end, total, true
+}
+
 func (d *Downloader) fetch(ctx context.Context, j *dlJob, url, part string, have, size int64, h hash.Hash, progress func(int64)) error {
 	if size > 0 && have == size {
 		return nil
@@ -464,8 +503,18 @@ func (d *Downloader) fetch(ctx context.Context, j *dlJob, url, part string, have
 	flags := os.O_CREATE | os.O_WRONLY
 	switch {
 	case resp.StatusCode == http.StatusPartialContent && have > 0:
+		cr := resp.Header.Get("Content-Range")
+		start, _, total, ok := ParseContentRange(cr)
+		if !ok || start != have || (size > 0 && total != size) {
+			os.Remove(part)
+			return fmt.Errorf("server returned bad Content-Range %q; restarting", cr)
+		}
 		flags |= os.O_APPEND
 	case resp.StatusCode == http.StatusOK:
+		if size > 0 && resp.ContentLength >= 0 && resp.ContentLength != size {
+			os.Remove(part)
+			return fmt.Errorf("wrong Content-Length (%d, expected %d)", resp.ContentLength, size)
+		}
 		flags |= os.O_TRUNC // server ignored Range: start over
 		h.Reset()
 		have = 0

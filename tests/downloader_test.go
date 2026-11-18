@@ -22,11 +22,13 @@ import (
 // fakeHub serves one file with Range support, optionally dropping the
 // connection after cut bytes on the first request.
 type fakeHub struct {
-	data     []byte
-	cut      int64
-	requests atomic.Int32
-	ranges   []string
-	slow     bool
+	data      []byte
+	cut       int64
+	requests  atomic.Int32
+	ranges    []string
+	slow      bool
+	badRange  bool
+	badLength bool
 }
 
 func (h *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,11 +37,21 @@ func (h *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := int64(0)
 	if rg := r.Header.Get("Range"); rg != "" {
 		start, _ = strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(rg, "bytes="), "-"), 10, 64)
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(h.data)-1, len(h.data)))
-		w.Header().Set("Content-Length", strconv.Itoa(len(h.data)-int(start)))
+		respStart := start
+		if h.badRange {
+			respStart = 0
+			h.badRange = false
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", respStart, len(h.data)-1, len(h.data)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(h.data)-int(respStart)))
 		w.WriteHeader(http.StatusPartialContent)
+		start = respStart
 	} else {
-		w.Header().Set("Content-Length", strconv.Itoa(len(h.data)))
+		contentLen := len(h.data)
+		if h.badLength {
+			contentLen -= 100
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(contentLen))
 		w.WriteHeader(http.StatusOK)
 	}
 	body := h.data[start:]
@@ -151,6 +163,90 @@ func TestDownloadResumesAfterDrop(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(mm.Dir(spec.ID), "w.gguf"))
 	if !bytes.Equal(got, data) {
 		t.Fatal("resumed file corrupt")
+	}
+}
+
+func TestDownloadRecoversFromBadRange(t *testing.T) {
+	data := payload(900_000)
+	hub := &fakeHub{data: data, cut: 300_000, badRange: true}
+	d, mm, _, wait := setup(t, hub)
+	spec := testSpec(data)
+	if err := d.Start(spec); err != nil {
+		t.Fatal(err)
+	}
+	if pr := wait(spec); pr.Status != app.DLDone {
+		t.Fatalf("status %v err %q", pr.Status, pr.Err)
+	}
+	if hub.requests.Load() < 3 {
+		t.Fatalf("expected at least 3 requests, got %d", hub.requests.Load())
+	}
+	if len(hub.ranges) < 3 {
+		t.Fatalf("expected at least 3 requests recorded, got %d", len(hub.ranges))
+	}
+	if hub.ranges[1] != "bytes=300000-" {
+		t.Errorf("request 2 should be resume, got Range=%q", hub.ranges[1])
+	}
+	if hub.ranges[2] != "" {
+		t.Errorf("request 3 should restart from zero, got Range=%q", hub.ranges[2])
+	}
+	got, err := os.ReadFile(filepath.Join(mm.Dir(spec.ID), "w.gguf"))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatal("resumed file corrupt")
+	}
+}
+
+func TestDownloadRejectsMismatchedContentLength(t *testing.T) {
+	data := payload(200_000)
+	hub := &fakeHub{data: data, badLength: true}
+	d, mm, _, wait := setup(t, hub)
+	d.Retries = 0
+	spec := testSpec(data)
+	d.Start(spec)
+	pr := wait(spec)
+	if pr.Status != app.DLFailed || !strings.Contains(pr.Err, "wrong Content-Length") {
+		t.Fatalf("status %v err %q", pr.Status, pr.Err)
+	}
+	if _, err := os.Stat(filepath.Join(mm.Dir(spec.ID), "w.gguf")); err == nil {
+		t.Fatal("file was installed despite mismatched Content-Length")
+	}
+	if d.PartialBytes(spec) != 0 {
+		t.Fatal("partial file was created or kept")
+	}
+}
+
+func TestParseContentRange(t *testing.T) {
+	tests := []struct {
+		input string
+		start int64
+		end   int64
+		total int64
+		ok    bool
+	}{
+		{"bytes 0-499/1000", 0, 499, 1000, true},
+		{"bytes 300000-899999/900000", 300000, 899999, 900000, true},
+		{"bytes 0-0/1", 0, 0, 1, true},
+		{"bytes 100-200/*", 100, 200, -1, true},
+		{"Bytes 0-499/1000", 0, 499, 1000, true},
+		{"  bytes 0-499/1000  ", 0, 499, 1000, true},
+		{"", 0, 0, 0, false},
+		{"bytes", 0, 0, 0, false},
+		{"bytes ", 0, 0, 0, false},
+		{"items 0-499/1000", 0, 0, 0, false},
+		{"bytes -499/1000", 0, 0, 0, false},
+		{"bytes 499-/1000", 0, 0, 0, false},
+		{"bytes 500-400/1000", 0, 0, 0, false},
+		{"bytes 0-1000/1000", 0, 0, 0, false},
+		{"bytes 0-499/0", 0, 0, 0, false},
+		{"bytes 0-499/-1", 0, 0, 0, false},
+		{"bytes abc-def/1000", 0, 0, 0, false},
+		{"bytes 0-100/xyz", 0, 0, 0, false},
+	}
+	for _, tc := range tests {
+		start, end, total, ok := app.ParseContentRange(tc.input)
+		if ok != tc.ok || start != tc.start || end != tc.end || total != tc.total {
+			t.Errorf("ParseContentRange(%q) = (%d, %d, %d, %v), want (%d, %d, %d, %v)",
+				tc.input, start, end, total, ok, tc.start, tc.end, tc.total, tc.ok)
+		}
 	}
 }
 
