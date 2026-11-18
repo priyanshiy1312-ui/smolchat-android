@@ -60,6 +60,44 @@ func TestClassifyCodeDetectionIsCaseSensitiveAndContextual(t *testing.T) {
 	}
 }
 
+func TestClassifyMatchesKeywordsAsWholeWords(t *testing.T) {
+	cases := map[string]app.Complexity{
+		// Keywords inside other words no longer count (#5).
+		"tell me about planets":      app.Simple, // plan
+		"what is a barcode":          app.Simple, // code
+		"what is a reasonable price": app.Simple, // reason
+		"who is the designer":        app.Simple, // design
+		"a TV programme tonight":     app.Simple, // program
+		// The keywords themselves, with regular endings and stems, still count.
+		"can you explain":        app.Moderate,
+		"explained simply":       app.Moderate,
+		"I found a bug":          app.Moderate,
+		"write a program":        app.Moderate,
+		"analysis of the data":   app.Moderate,
+		"optimise my code":       app.Moderate,
+		"step-by-step guide":     app.Moderate,
+		"pros and cons of solar": app.Moderate,
+	}
+	for q, want := range cases {
+		if got := app.Classify(q, 0); got != want {
+			t.Errorf("Classify(%q) = %v, want %v", q, got, want)
+		}
+	}
+}
+
+func TestClassifyCountsOverlappingKeywordsOnce(t *testing.T) {
+	// "how does" used to count "how do" as well, and "debug" also counted
+	// "bug". With more than ten words, a second hit pushed these to Complex.
+	for _, q := range []string{
+		"how does rain form over the sea in the middle of a cold winter",
+		"please debug the script that I wrote for my small garden watering timer",
+	} {
+		if got := app.Classify(q, 0); got != app.Moderate {
+			t.Errorf("Classify(%q) = %v, want moderate", q, got)
+		}
+	}
+}
+
 func TestSelectModelByComplexity(t *testing.T) {
 	small, mid, big := spec(t, "smollm2-135m-instruct-q8"), spec(t, "smollm2-360m-instruct-q8"), spec(t, "smollm2-1.7b-instruct-q4km")
 	in := app.RouteInput{Installed: []app.ModelSpec{small, mid, big}, Device: app.DeviceInfo{TotalRAM: 8 * gb, AvailRAM: 4 * gb}, ContextSize: 2048}
