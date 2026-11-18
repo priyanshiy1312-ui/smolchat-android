@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -141,7 +142,13 @@ func OpenSettings(path string) (*SettingsStore, error) {
 	}
 	s := DefaultSettings()
 	if err := json.Unmarshal(b, &s); err != nil {
-		return st, nil // corrupt file: keep defaults, it is rewritten on next save
+		bad := path + ".bad"
+		if wErr := os.WriteFile(bad, b, 0o644); wErr != nil {
+			log.Printf("settings: %s is corrupt (%v); could not keep a copy: %v", path, err, wErr)
+		} else {
+			log.Printf("settings: %s is corrupt (%v); copy kept at %s, using defaults", path, err, bad)
+		}
+		return st, nil // keep defaults; the file is rewritten on next save
 	}
 	s.normalize()
 	st.cur = s
@@ -166,14 +173,44 @@ func (st *SettingsStore) Update(f func(*Settings)) error {
 	return writeJSONAtomic(st.path, s)
 }
 
-func writeJSONAtomic(path string, v any) error {
+func writeJSONAtomic(path string, v any) (err error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	// Never leave a stray .tmp file behind if any step fails.
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
+	if _, err = f.Write(b); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil { // data must be on disk before the rename
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path)) // make the rename itself durable
+}
+
+// syncDir flushes a directory so a rename inside it survives a crash.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
