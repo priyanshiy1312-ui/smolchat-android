@@ -77,6 +77,14 @@ func TestClassifyMatchesKeywordsAsWholeWords(t *testing.T) {
 		"optimise my code":       app.Moderate,
 		"step-by-step guide":     app.Moderate,
 		"pros and cons of solar": app.Moderate,
+		// Endings that double the last letter or drop a final "e".
+		"planning a trip":       app.Moderate,
+		"debugging help":        app.Moderate,
+		"programming in rust":   app.Moderate,
+		"coding tips":           app.Moderate,
+		"comparing two phones":  app.Moderate,
+		"summarizing this text": app.Moderate,
+		"a cod for dinner":      app.Simple,
 	}
 	for q, want := range cases {
 		if got := app.Classify(q, 0); got != want {
