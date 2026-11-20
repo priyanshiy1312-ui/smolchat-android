@@ -79,7 +79,41 @@ var (
 		"implement", "refactor", "optimi", "detailed", "in depth", "outline", "strategy",
 	}
 	simpleKws = []string{"hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no", "good morning", "good night"}
+
+	// complexKwStems match any word that starts with them (analysis, analyze,
+	// optimise, optimization); every other keyword must be a whole word.
+	complexKwStems = map[string]bool{"analy": true, "optimi": true}
+	complexKwRes   = compileKeywords(complexKws)
 )
+
+// compileKeywords turns each keyword into a regexp that matches it as a whole
+// word or phrase. strings.Contains matched keywords inside other words: "plan"
+// in "planets" and "explain", "code" in "barcode", "bug" in "debug" (#5).
+// A single-word keyword may take a regular ending, so "explained", "bugs",
+// "planning", "debugging", "coding" and "summarised" count, but "designer" and
+// "reasonable" don't. Phrases match exactly, so "how do" doesn't also match
+// "how does".
+func compileKeywords(kws []string) []*regexp.Regexp {
+	res := make([]*regexp.Regexp, len(kws))
+	for i, k := range kws {
+		words := strings.Fields(k)
+		p := regexp.QuoteMeta(strings.Join(words, " "))
+		p = strings.ReplaceAll(p, " ", `\s+`)
+		switch {
+		case complexKwStems[k]:
+			p += `\w*`
+		case len(words) == 1 && strings.HasSuffix(k, "e"):
+			// code -> code, codes, coded, coding (but not "cod")
+			p = regexp.QuoteMeta(strings.TrimSuffix(k, "e")) + `(?:e|es|ed|ing)`
+		case len(words) == 1:
+			// plan -> plans, planned, planning; debug -> debugged, debugging
+			last := regexp.QuoteMeta(k[len(k)-1:])
+			p += `(?:s|es|ed|ing|` + last + `ed|` + last + `ing)?`
+		}
+		res[i] = regexp.MustCompile(`\b` + p + `\b`)
+	}
+	return res
+}
 
 // Classify estimates a query's complexity from its length, keywords and
 // structure. It is deliberately cheap: it runs on every send.
@@ -96,8 +130,8 @@ func Classify(q string, historyTurns int) Complexity {
 		score++
 	}
 	hits := 0
-	for _, k := range complexKws {
-		if strings.Contains(t, k) {
+	for _, re := range complexKwRes {
+		if re.MatchString(t) {
 			hits++
 		}
 	}
