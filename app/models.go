@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
-        "strings"
 )
 
 // Category groups models in the library.
@@ -293,10 +293,11 @@ type ModelManager struct {
 	mu        sync.Mutex
 	installed map[string]InstalledModel
 }
+
 // OrphanedModel describes files belonging to a model no longer in the catalog.
 type OrphanedModel struct {
-    ID    string
-    Bytes int64
+	ID    string
+	Bytes int64
 }
 
 // NewModelManager scans the model directory.
@@ -342,27 +343,28 @@ func (m *ModelManager) Scan() {
 	m.installed = found
 	m.mu.Unlock()
 }
+
 // directoryBytes returns the size of regular files beneath a directory.
 func directoryBytes(root string) int64 {
-    var total int64
-    _ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-        if err != nil {
-            return nil
-        }
-        info, err := entry.Info()
-        if err == nil && info.Mode().IsRegular() {
-            total += info.Size()
-        }
-        return nil
-    })
-    return total
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		info, err := entry.Info()
+		if err == nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // OrphanedModels finds files belonging to IDs no longer in the catalog.
 func (m *ModelManager) OrphanedModels() []OrphanedModel {
-    ids := make(map[string]bool)
+	ids := make(map[string]bool)
 
-		collect := func(root, prefix, suffix string, directoriesOnly bool) {
+	collect := func(root, prefix, suffix string, directoriesOnly bool) {
 		entries, err := os.ReadDir(root)
 		if err != nil {
 			return
@@ -394,67 +396,67 @@ func (m *ModelManager) OrphanedModels() []OrphanedModel {
 		}
 	}
 
-		collect(m.paths.Models, "", "", true)
-	    collect(m.paths.Tmp, "", "", true)
-	    collect(m.paths.Meta, "installed-", ".json", false)
+	collect(m.paths.Models, "", "", true)
+	collect(m.paths.Tmp, "", "", true)
+	collect(m.paths.Meta, "installed-", ".json", false)
 
-    var out []OrphanedModel
-    for id := range ids {
-        if _, exists := FindSpec(id); exists {
-            continue
-        }
+	var out []OrphanedModel
+	for id := range ids {
+		if _, exists := FindSpec(id); exists {
+			continue
+		}
 
-        size := directoryBytes(m.Dir(id))
-        size += directoryBytes(filepath.Join(m.paths.Tmp, id))
+		size := directoryBytes(m.Dir(id))
+		size += directoryBytes(filepath.Join(m.paths.Tmp, id))
 
-        if info, err := os.Stat(m.manifestPath(id)); err == nil && info.Mode().IsRegular() {
-            size += info.Size()
-        }
+		if info, err := os.Stat(m.manifestPath(id)); err == nil && info.Mode().IsRegular() {
+			size += info.Size()
+		}
 
-        out = append(out, OrphanedModel{ID: id, Bytes: size})
-    }
+		out = append(out, OrphanedModel{ID: id, Bytes: size})
+	}
 
-    sort.Slice(out, func(i, j int) bool {
-        return out[i].ID < out[j].ID
-    })
-    return out
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // OrphanedBytes returns the total storage occupied by orphaned model files.
 func (m *ModelManager) OrphanedBytes() int64 {
-    var total int64
-    for _, model := range m.OrphanedModels() {
-        total += model.Bytes
-    }
-    return total
+	var total int64
+	for _, model := range m.OrphanedModels() {
+		total += model.Bytes
+	}
+	return total
 }
 
 // cleanupOrphan removes files only when the ID is no longer in the catalog.
 func (m *ModelManager) cleanupOrphan(id string) error {
-    if id == "" || id == "." || id == ".." || filepath.IsAbs(id) || filepath.Base(id) != id {
-        return fmt.Errorf("invalid model ID %q", id)
-    }
-    if _, exists := FindSpec(id); exists {
-        return fmt.Errorf("model %q is still in the catalog", id)
-    }
+	if id == "" || id == "." || id == ".." || filepath.IsAbs(id) || filepath.Base(id) != id {
+		return fmt.Errorf("invalid model ID %q", id)
+	}
+	if _, exists := FindSpec(id); exists {
+		return fmt.Errorf("model %q is still in the catalog", id)
+	}
 
-    m.mu.Lock()
-    delete(m.installed, id)
-    m.mu.Unlock()
+	m.mu.Lock()
+	delete(m.installed, id)
+	m.mu.Unlock()
 
-    return errors.Join(
-        os.RemoveAll(m.Dir(id)),
-        os.RemoveAll(filepath.Join(m.paths.Tmp, id)),
-        removeIfExists(m.manifestPath(id)),
-    )
+	return errors.Join(
+		os.RemoveAll(m.Dir(id)),
+		os.RemoveAll(filepath.Join(m.paths.Tmp, id)),
+		removeIfExists(m.manifestPath(id)),
+	)
 }
 
 func removeIfExists(path string) error {
-    err := os.Remove(path)
-    if errors.Is(err, os.ErrNotExist) {
-        return nil
-    }
-    return err
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // IsInstalled reports whether id is ready to load.
@@ -481,7 +483,7 @@ func (m *ModelManager) Installed() []ModelSpec {
 
 // InstalledBytes returns storage used by model and partial download files.
 func (m *ModelManager) InstalledBytes() int64 {
-    return directoryBytes(m.paths.Models) + directoryBytes(m.paths.Tmp)
+	return directoryBytes(m.paths.Models) + directoryBytes(m.paths.Tmp)
 }
 
 // WeightsPath is the GGUF to load for spec.
