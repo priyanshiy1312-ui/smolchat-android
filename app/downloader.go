@@ -329,95 +329,99 @@ func (d *Downloader) download(ctx context.Context, j *dlJob, spec ModelSpec) err
 // the catalog (names, sizes, LFS SHA-256), so a moved or replaced file is
 // caught before any bytes are downloaded.
 func (d *Downloader) VerifyRemote(ctx context.Context, spec ModelSpec) error {
-        var lastErr error
-        retryDelay := time.Second
+	var lastErr error
+	retryDelay := time.Second
 
-        for attempt := 0; attempt <= d.Retries; attempt++ {
-                if attempt > 0 {
-                        select {
-                        case <-time.After(retryDelay):
-                        case <-ctx.Done():
-                                return ctx.Err()
-                        }
-                }
+	for attempt := 0; attempt <= d.Retries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 
-                req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.TreeURL(spec), nil)
-                if err != nil {
-                        return err
-                }
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.TreeURL(spec), nil)
+		if err != nil {
+			return err
+		}
 
-                resp, err := d.client.Do(req)
-                if err != nil {
-                        if ctx.Err() != nil {
-                                return ctx.Err()
-                        }
-                        lastErr = err
-                        retryDelay = time.Duration(1<<attempt) * time.Second
-                        continue
-                }
+		resp, err := d.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			lastErr = err
+			retryDelay = time.Duration(1<<attempt) * time.Second
+			continue
+		}
 
-                if resp.StatusCode != http.StatusOK {
-                        status := resp.StatusCode
-                        retryAfter := resp.Header.Get("Retry-After")
-                        resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			retryAfter := resp.Header.Get("Retry-After")
+			resp.Body.Close()
 
-                        if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound {
-                                return fmt.Errorf("Hugging Face repository %s is unavailable (HTTP %d)", spec.Repo, status)
-                        }
+			if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound {
+				return fmt.Errorf("Hugging Face repository %s is unavailable (HTTP %d)", spec.Repo, status)
+			}
 
-                        lastErr = fmt.Errorf("Hugging Face repository %s returned HTTP %d", spec.Repo, status)
-                        retryDelay = time.Duration(1<<attempt) * time.Second
+			lastErr = fmt.Errorf("Hugging Face repository %s returned HTTP %d", spec.Repo, status)
+			retryDelay = time.Duration(1<<attempt) * time.Second
 
-                        if status == http.StatusTooManyRequests && retryAfter != "" {
-                                if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
-                                        retryDelay = time.Duration(seconds) * time.Second
-                                } else if when, err := http.ParseTime(retryAfter); err == nil {
-                                        retryDelay = time.Until(when)
-                                        if retryDelay < 0 {
-                                                retryDelay = 0
-                                        }
-                                }
-                        }
-                        continue
-                }
-                var tree []struct {
-                        Path string `json:"path"`
-                        Size int64  `json:"size"`
-                        LFS  *struct {
-                                OID string `json:"oid"`
-                        } `json:"lfs"`
-                }
+			if status == http.StatusTooManyRequests && retryAfter != "" {
+				if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+					retryDelay = time.Duration(seconds) * time.Second
+				} else if when, err := http.ParseTime(retryAfter); err == nil {
+					retryDelay = time.Until(when)
+					if retryDelay < 0 {
+						retryDelay = 0
+					}
+				}
+			}
+			if status == http.StatusTooManyRequests && retryDelay > 60*time.Second {
+				retryDelay = 60 * time.Second
+			}
+			continue
+		}
+		var tree []struct {
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+			LFS  *struct {
+				OID string `json:"oid"`
+			} `json:"lfs"`
+		}
 
-                err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&tree)
-                resp.Body.Close()
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&tree)
+		resp.Body.Close()
 
-                if err != nil {
-                        lastErr = err
-                        retryDelay = time.Duration(1<<attempt) * time.Second
-                        continue
-                }
+		if err != nil {
+			lastErr = err
+			retryDelay = time.Duration(1<<attempt) * time.Second
+			continue
+		}
 
-                for _, f := range spec.Files {
-                        found := false
-                        for _, t := range tree {
-                                if t.Path != f.Name {
-                                        continue
-                                }
-                                found = true
-                                if t.Size != f.Size || (t.LFS != nil && f.SHA256 != "" && t.LFS.OID != f.SHA256) {
-                                        return fmt.Errorf("%s on Hugging Face no longer matches the verified catalog entry", f.Name)
-                                }
-                        }
-                        if !found {
-                                return fmt.Errorf("%s was not found in %s", f.Name, spec.Repo)
-                        }
-                }
+		for _, f := range spec.Files {
+			found := false
+			for _, t := range tree {
+				if t.Path != f.Name {
+					continue
+				}
+				found = true
+				if t.Size != f.Size || (t.LFS != nil && f.SHA256 != "" && t.LFS.OID != f.SHA256) {
+					return fmt.Errorf("%s on Hugging Face no longer matches the verified catalog entry", f.Name)
+				}
+			}
+			if !found {
+				return fmt.Errorf("%s was not found in %s", f.Name, spec.Repo)
+			}
+		}
 
-                return nil
-        }
+		return nil
+	}
 
-        return fmt.Errorf("couldn't reach Hugging Face, tap to retry: %w", lastErr)
+	return fmt.Errorf("couldn't reach Hugging Face, tap to retry: %w", lastErr)
 }
+
 // downloadFile fetches one file with resume + retries and verifies it.
 func (d *Downloader) downloadFile(ctx context.Context, j *dlJob, spec ModelSpec, f ModelFile, final string, progress func(int64)) error {
 	part := filepath.Join(d.partDir(spec.ID), f.Name+".part")
