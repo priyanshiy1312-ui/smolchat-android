@@ -330,24 +330,57 @@ func (d *Downloader) download(ctx context.Context, j *dlJob, spec ModelSpec) err
 // caught before any bytes are downloaded.
 func (d *Downloader) VerifyRemote(ctx context.Context, spec ModelSpec) error {
 	var lastErr error
+	retryDelay := time.Second
+
 	for attempt := 0; attempt <= d.Retries; attempt++ {
 		if attempt > 0 {
 			select {
-			case <-time.After(time.Duration(1<<(attempt-1)) * time.Second):
+			case <-time.After(retryDelay):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.TreeURL(spec), nil)
 		if err != nil {
 			return err
 		}
+
 		resp, err := d.client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			lastErr = err
+			retryDelay = time.Duration(1<<attempt) * time.Second
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			retryAfter := resp.Header.Get("Retry-After")
+			resp.Body.Close()
+
+			if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound {
+				return fmt.Errorf("Hugging Face repository %s is unavailable (HTTP %d)", spec.Repo, status)
+			}
+
+			lastErr = fmt.Errorf("Hugging Face repository %s returned HTTP %d", spec.Repo, status)
+			retryDelay = time.Duration(1<<attempt) * time.Second
+
+			if status == http.StatusTooManyRequests && retryAfter != "" {
+				if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+					retryDelay = time.Duration(seconds) * time.Second
+				} else if when, err := http.ParseTime(retryAfter); err == nil {
+					retryDelay = time.Until(when)
+					if retryDelay < 0 {
+						retryDelay = 0
+					}
+				}
+			}
+			if status == http.StatusTooManyRequests && retryDelay > 60*time.Second {
+				retryDelay = 60 * time.Second
+			}
 			continue
 		}
 		var tree []struct {
@@ -357,15 +390,16 @@ func (d *Downloader) VerifyRemote(ctx context.Context, spec ModelSpec) error {
 				OID string `json:"oid"`
 			} `json:"lfs"`
 		}
+
 		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&tree)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("Hugging Face repository %s is unavailable (HTTP %d)", spec.Repo, resp.StatusCode)
-		}
+
 		if err != nil {
 			lastErr = err
+			retryDelay = time.Duration(1<<attempt) * time.Second
 			continue
 		}
+
 		for _, f := range spec.Files {
 			found := false
 			for _, t := range tree {
@@ -381,8 +415,10 @@ func (d *Downloader) VerifyRemote(ctx context.Context, spec ModelSpec) error {
 				return fmt.Errorf("%s was not found in %s", f.Name, spec.Repo)
 			}
 		}
+
 		return nil
 	}
+
 	return fmt.Errorf("couldn't reach Hugging Face, tap to retry: %w", lastErr)
 }
 
