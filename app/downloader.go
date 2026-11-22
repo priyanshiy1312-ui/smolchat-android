@@ -170,6 +170,30 @@ func (d *Downloader) AnyActive() bool {
 	}
 	return false
 }
+// CleanupOrphans removes files for models no longer in the catalog.
+// Active downloads are skipped.
+func (d *Downloader) CleanupOrphans() (int64, error) {
+    d.mu.Lock()
+    defer d.mu.Unlock()
+
+    var cleaned int64
+    var errs []error
+
+    for _, orphan := range d.models.OrphanedModels() {
+        if job, ok := d.jobs[orphan.ID]; ok && job.prog.Active() {
+            continue
+        }
+
+        if err := d.models.cleanupOrphan(orphan.ID); err != nil {
+            errs = append(errs, fmt.Errorf("%s: %w", orphan.ID, err))
+            continue
+        }
+
+        cleaned += orphan.Bytes
+    }
+
+    return cleaned, errors.Join(errs...)
+}
 
 // Start begins (or resumes) downloading spec in the background.
 func (d *Downloader) Start(spec ModelSpec) error {
