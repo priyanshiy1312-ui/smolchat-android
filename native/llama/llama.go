@@ -336,9 +336,12 @@ func (e *Engine) run(ctx context.Context, s *C.smol_ctx, tokens []C.int32_t, opt
 		if C.smol_is_eog(s, tok) {
 			return finish("eos", nil)
 		}
-		n := C.smol_token_piece(s, tok, (*C.char)(unsafe.Pointer(&piece[0])), C.int(len(piece)))
-		if n > 0 {
-			pending = append(pending, piece[:n]...)
+		var text []byte
+		text, piece = readPiece(piece, func(p []byte) int {
+			return int(C.smol_token_piece(s, tok, (*C.char)(unsafe.Pointer(&p[0])), C.int(len(p))))
+		})
+		if len(text) > 0 {
+			pending = append(pending, text...)
 			if text := validPrefix(&pending); text != "" {
 				select {
 				case out <- app.Token{Text: text}:
