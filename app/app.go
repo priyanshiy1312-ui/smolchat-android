@@ -35,14 +35,14 @@ type App struct {
 	invalidate func()
 
 	mu            sync.Mutex
-    device        DeviceInfo
-    convs         []Conversation
-    search        string
-    searchVersion uint64
-    chat          chatState
-    notices       []Notice
-	noticeID int
-	online   int // -1 unknown, 0 offline, 1 online
+	device        DeviceInfo
+	convs         []Conversation
+	search        string
+	searchVersion uint64
+	chat          chatState
+	notices       []Notice
+	noticeID      int
+	online        int // -1 unknown, 0 offline, 1 online
 
 	themeChecked time.Time
 }
@@ -200,12 +200,14 @@ func (a *App) OnForeground() {
 	a.Models.Scan()
 	a.RefreshDevice()
 }
+
 // Conversations returns the (filtered) sidebar list.
 func (a *App) Conversations() ([]Conversation, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]Conversation(nil), a.convs...), a.search
 }
+
 // SetSearch filters the conversation list.
 func (a *App) SetSearch(q string) {
 	a.mu.Lock()
