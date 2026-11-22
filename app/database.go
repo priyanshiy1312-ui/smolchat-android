@@ -40,6 +40,7 @@ type Message struct {
 type Store struct {
 	db *sql.DB
 }
+
 const sqliteDriverName = "smolchat_sqlite3"
 
 func init() {

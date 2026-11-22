@@ -158,9 +158,9 @@ func TestUnicodeCaseInsensitiveSearch(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
+		name  string
 		query string
-		want string
+		want  string
 	}{
 		{"lowercase German title", "über", titleConv.ID},
 		{"uppercase German title", "ÜBER", titleConv.ID},
