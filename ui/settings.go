@@ -81,6 +81,7 @@ type SettingsScreen struct {
 	loaded     bool
 	lastTemp   float32
 	sysLoaded  string
+        cleanupOrphans widget.Clickable
 }
 
 var (
@@ -170,6 +171,18 @@ func (s *SettingsScreen) Layout(gtx C, u *UI) D {
 	if s.library.Clicked(gtx) {
 		u.navigate(screenLibrary)
 	}
+        if s.cleanupOrphans.Clicked(gtx) && a.Models.OrphanedBytes() > 0 {
+    bytes := a.Models.OrphanedBytes()
+    u.dialog.Confirm(
+        "Clean up old model files?",
+        fmt.Sprintf("This will remove %s of files belonging to models no longer in the catalog.", app.HumanBytes(bytes)),
+        "Clean up",
+        true,
+        func(string) {
+            a.CleanupOrphanedModels()
+        },
+    )
+}
 	if s.clearChats.Clicked(gtx) {
 		u.dialog.Confirm("Delete all chats?", "Every conversation on this phone will be permanently removed.", "Delete all", true,
 			func(string) { a.DeleteAllConversations(); a.Notify("All chats deleted", false) })
@@ -241,23 +254,36 @@ func (s *SettingsScreen) Layout(gtx C, u *UI) D {
 			)
 		},
 
-		func(gtx C) D { return Section(gtx, th, "STORAGE & PRIVACY") },
-		func(gtx C) D {
-			return stacked(gtx, th, "Models folder", a.Paths.Models, nil)
-		},
-		Gap(12),
-		func(gtx C) D {
-			return settingRow(gtx, th, "Manage models",
-				fmt.Sprintf("%s downloaded · %s free", app.HumanBytes(a.Models.InstalledBytes()), app.HumanBytes(dev.FreeStorage)),
-				func(gtx C) D {
-					return Button{Kind: BtnSecondary, Text: "Model Library", Icon: ic.Library, Small: true}.Layout(gtx, th, &s.library)
-				})
-		},
-		Gap(14),
-		func(gtx C) D {
-			return hint(gtx, th, "SmolChat has no telemetry and no cloud services. Chats are stored only in a local database on this phone, and the internet is used only to download models from Hugging Face.")
-		},
-		Gap(14),
+			func(gtx C) D { return Section(gtx, th, "STORAGE & PRIVACY") },
+	func(gtx C) D {
+		return stacked(gtx, th, "Models folder", a.Paths.Models, nil)
+	},
+	Gap(12),
+	func(gtx C) D {
+		return settingRow(gtx, th, "Manage models",
+			fmt.Sprintf("%s downloaded · %s free",
+				app.HumanBytes(a.Models.InstalledBytes()),
+				app.HumanBytes(dev.FreeStorage)),
+			func(gtx C) D {
+				return Button{Kind: BtnSecondary, Text: "Model Library", Icon: ic.Library, Small: true}.Layout(gtx, th, &s.library)
+			})
+	},
+	func(gtx C) D {
+		bytes := a.Models.OrphanedBytes()
+		return settingRow(gtx, th, "Old model files",
+			fmt.Sprintf("%s can be removed", app.HumanBytes(bytes)),
+			func(gtx C) D {
+				if bytes == 0 {
+					return Lbl(th, 13, th.Pal.TextMuted, font.Regular, "Nothing to clean up").Layout(gtx)
+				}
+				return Button{Kind: BtnDanger, Text: "Clean up", Icon: ic.Delete, Small: true}.Layout(gtx, th, &s.cleanupOrphans)
+			})
+	},
+	Gap(14),
+	func(gtx C) D {
+		return hint(gtx, th, "SmolChat has no telemetry and no cloud services. Chats are stored only in a local database on this phone, and the internet is used only to download models from Hugging Face.")
+	},
+	Gap(14),
 		func(gtx C) D {
 			return Button{Kind: BtnDanger, Text: "Delete all chats", Icon: ic.Delete, Small: true}.Layout(gtx, th, &s.clearChats)
 		},

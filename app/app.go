@@ -274,6 +274,22 @@ func (a *App) StartDownload(id string) {
 	}
 }
 
+// CleanupOrphanedModels removes files belonging to models no longer in the catalog.
+func (a *App) CleanupOrphanedModels() {
+	go func() {
+		cleaned, err := a.Downloads.CleanupOrphans()
+		if err != nil {
+			a.report(err)
+		}
+		a.RefreshDevice()
+		a.invalidate()
+
+		if cleaned > 0 {
+			a.Notify("Cleaned up "+HumanBytes(cleaned)+" of old model files", false)
+		}
+	}()
+}
+
 // DeleteModel unloads (if resident) and deletes id's files.
 func (a *App) DeleteModel(id string) {
 	go func() {
