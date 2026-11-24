@@ -64,14 +64,16 @@ func New(o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-        logPath := filepath.Join(paths.Logs, "smolchat.log")
-        logWriter, err := newRotatingLogWriter(logPath)
-        if err != nil {
-                return nil, fmt.Errorf("initialize log writer: %w", err)
-        }
-        log.SetOutput(logWriter)
+	logPath := filepath.Join(paths.Logs, "smolchat.log")
+	logWriter, err := newRotatingLogWriter(logPath)
+	if err != nil {
+		log.SetOutput(os.Stderr)
+		log.Printf("initialize log writer: %v", err)
+	} else {
+		log.SetOutput(logWriter)
+	}
 
-        a := &App{Paths: paths, invalidate: o.Invalidate, online: -1}
+	a := &App{Paths: paths, invalidate: o.Invalidate, online: -1}
 
 	if a.Settings, err = OpenSettings(paths.Settings); err != nil {
 		log.Printf("settings: %v", err)
