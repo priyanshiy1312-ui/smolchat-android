@@ -41,32 +41,87 @@ type Store struct {
 	db *sql.DB
 }
 
-const schema = `
+// schemaMigrations contains database migrations in version order.
+// Never modify an existing migration; add new migrations at the end.
+var schemaMigrations = []string{
+	// Migration 1: Initial database schema.
+	`
 CREATE TABLE IF NOT EXISTS conversations (
-	id             TEXT PRIMARY KEY,
-	title          TEXT NOT NULL,
-	created_at     INTEGER NOT NULL,
-	updated_at     INTEGER NOT NULL,
-	model_id       TEXT NOT NULL DEFAULT '',
-	selection_mode TEXT NOT NULL DEFAULT 'auto'
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    model_id       TEXT NOT NULL DEFAULT '',
+    selection_mode TEXT NOT NULL DEFAULT 'auto'
 );
+
 CREATE TABLE IF NOT EXISTS messages (
-	id              INTEGER PRIMARY KEY AUTOINCREMENT,
-	conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-	role            TEXT NOT NULL,
-	content         TEXT NOT NULL,
-	model_id        TEXT NOT NULL DEFAULT '',
-	created_at      INTEGER NOT NULL,
-	tokens          INTEGER NOT NULL DEFAULT 0,
-	tokens_per_sec  REAL NOT NULL DEFAULT 0,
-	duration_ms     INTEGER NOT NULL DEFAULT 0,
-	stop_reason     TEXT NOT NULL DEFAULT '',
-	route_reason    TEXT NOT NULL DEFAULT ''
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    model_id        TEXT NOT NULL DEFAULT '',
+    created_at      INTEGER NOT NULL,
+    tokens          INTEGER NOT NULL DEFAULT 0,
+    tokens_per_sec  REAL NOT NULL DEFAULT 0,
+    duration_ms     INTEGER NOT NULL DEFAULT 0,
+    stop_reason     TEXT NOT NULL DEFAULT '',
+    route_reason    TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS messages_conv ON messages(conversation_id, id);
-CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at DESC);
-PRAGMA user_version = 1;
-`
+
+CREATE INDEX IF NOT EXISTS messages_conv
+    ON messages(conversation_id, id);
+
+CREATE INDEX IF NOT EXISTS conversations_updated
+    ON conversations(updated_at DESC);
+`,
+}
+
+// migrateDatabase applies pending migrations in order.
+func migrateDatabase(db *sql.DB) error {
+	return migrateDatabaseWithMigrations(db, schemaMigrations)
+}
+
+func migrateDatabaseWithMigrations(db *sql.DB, migrations []string) error {
+	var currentVersion int
+
+	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
+		return fmt.Errorf("read database version: %w", err)
+	}
+
+	latestVersion := len(migrations)
+
+	if currentVersion > latestVersion {
+		return fmt.Errorf(
+			"database schema version %d is newer than supported version %d",
+			currentVersion,
+			latestVersion,
+		)
+	}
+
+	for version := currentVersion + 1; version <= latestVersion; version++ {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", version, err)
+		}
+
+		if _, err := tx.Exec(migrations[version-1]); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply migration %d: %w", version, err)
+		}
+
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("update database version to %d: %w", version, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", version, err)
+		}
+	}
+
+	return nil
+}
 
 // OpenStore opens (and migrates) the database at path.
 func OpenStore(path string) (*Store, error) {
@@ -74,11 +129,14 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // SQLite: one writer; avoids SQLITE_BUSY between goroutines
-	if _, err := db.Exec(schema); err != nil {
+
+	db.SetMaxOpenConns(1)
+
+	if err := migrateDatabase(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+
 	return &Store{db: db}, nil
 }
 
